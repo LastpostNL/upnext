@@ -260,28 +260,34 @@ async function buildCatalog() {
   });
 
   const metas = withDates.map(s => {
-    const meta = {
-      id: s.tmdbId ? `tmdb:${s.tmdbId}` : `trakt:${s.traktId}`,
-      type: 'series',
-      name: s.name,
-      ids: s.tmdbId ? { tmdb: s.tmdbId } : undefined,
-      overview: s.overview || undefined,
-      trakt: { id: s.traktId },
-      extra: {}
+  const showImages = s.show.images || {}; // s.show is het originele show-object van Trakt
+  const poster = showImages.poster || showImages.thumb || showImages.fanart || null;
+
+  const meta = {
+    id: `tmdb:${s.tmdbId}`,
+    type: 'series',
+    name: s.name,
+    ids: { tmdb: s.tmdbId },
+    overview: s.overview || undefined,
+    trakt: { id: s.traktId },
+    poster, // Stremio zal deze als cover gebruiken
+    extra: {}
+  };
+
+  if (s.latestEpisode) {
+    meta.extra.latestEpisode = {
+      season: s.latestEpisode.season,
+      number: s.latestEpisode.number,
+      title: s.latestEpisode.title,
+      first_aired: s.latestEpisode.first_aired
     };
-    if (s.latestEpisode) {
-      meta.extra.latestEpisode = {
-        season: s.latestEpisode.season,
-        number: s.latestEpisode.number,
-        title: s.latestEpisode.title,
-        first_aired: s.latestEpisode.first_aired
-      };
-      meta.description = `Latest available episode: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title} (${s.latestEpisode.first_aired})`;
-    } else {
-      meta.description = `No available (already aired) episodes found for this show yet.`;
-    }
-    return meta;
-  });
+    meta.description = `Laatst beschikbare afbeelding: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`;
+  } else {
+    meta.description = `Geen beschikbare (al uitgezonden) afleveringen gevonden.`;
+  }
+
+  return meta;
+});
 
   const catalog = { metas };
   catalogCache = catalog;
@@ -417,4 +423,5 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
