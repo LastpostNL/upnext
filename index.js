@@ -1,12 +1,3 @@
-Copilot said: Thanks — the problem is your app
-Thanks — the problem is your app is still building the redirect URI dynamically from the request (and it doesn't trust the Render proxy), plus the token refresh / exchange sometimes needs to use the exact redirect URI you registered. Update index.js so it:
-
-trusts the proxy (so req.protocol becomes "https" on Render)
-prefers the TRAKT_REDIRECT_URI env var if present (so the app always uses exactly the same redirect URI you registered in Trakt)
-uses that redirect URI consistently for /auth, /auth/callback and token refresh
-Apply this updated file, redeploy/restart on Render, then run a fresh authorization (don't reuse an old code).
-
-name=index.js
 const express = require('express');
 const fetch = require('node-fetch');
 
