@@ -243,13 +243,13 @@ const withDates = resolved.map(r => {
   const show = r.show;
   const latest = r.latest;
   return {
-    show, // <-- voeg dit toe, anders is s.show undefined
+    show,
     traktId: show.ids.trakt,
     tmdbId: show.ids && show.ids.tmdb ? show.ids.tmdb : null,
     name: show.title || show.name || '',
     year: show.year || null,
     overview: show.overview || '',
-    latestEpisode: latest
+    latestEpisode: latest ? { ...latest, ts: latest.ts || Date.parse(latest.first_aired) } : null
   };
 });
 
@@ -424,6 +424,7 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
 
