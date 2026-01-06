@@ -260,38 +260,48 @@ async function buildCatalog() {
     return 0;
   });
 
-  const metas = withDates.map(s => {
-    const showImages = s.show.images || {};
-    let poster = null;
-    if (showImages.poster?.full) poster = showImages.poster.full;
-    else if (showImages.thumb?.full) poster = showImages.thumb.full;
-    else if (showImages.fanart?.full) poster = showImages.fanart.full;
 
-    const meta = {
-      id: `tmdb:${s.tmdbId}`,
-      type: 'series',
-      name: s.name,
-      ids: { tmdb: s.tmdbId },
-      overview: s.overview || undefined,
-      trakt: { id: s.traktId },
-      poster,
-      extra: {}
+function getShowPoster(images) {
+  if (!images) return null;
+
+  // Trakt kan objecten of arrays teruggeven
+  const posterObj = images.poster || images.thumb || images.fanart || null;
+
+  if (!posterObj) return null;
+  if (Array.isArray(posterObj)) {
+    return posterObj[0]?.full || posterObj[0]?.medium || null;
+  }
+  return posterObj.full || posterObj.medium || null;
+}
+  
+const metas = withDates.map(s => {
+  const poster = getShowPoster(s.show.images);
+
+  const meta = {
+    id: `tmdb:${s.tmdbId}`,
+    type: 'series',
+    name: s.name,
+    ids: { tmdb: s.tmdbId },
+    overview: s.overview || undefined,
+    trakt: { id: s.traktId },
+    poster, // Stremio gebruikt dit
+    extra: {}
+  };
+
+  if (s.latestEpisode) {
+    meta.extra.latestEpisode = {
+      season: s.latestEpisode.season,
+      number: s.latestEpisode.number,
+      title: s.latestEpisode.title,
+      first_aired: s.latestEpisode.first_aired
     };
+    meta.description = `Laatst beschikbare aflevering: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`;
+  } else {
+    meta.description = `Geen beschikbare (al uitgezonden) afleveringen gevonden.`;
+  }
 
-    if (s.latestEpisode) {
-      meta.extra.latestEpisode = {
-        season: s.latestEpisode.season,
-        number: s.latestEpisode.number,
-        title: s.latestEpisode.title,
-        first_aired: s.latestEpisode.first_aired
-      };
-      meta.description = `Laatst beschikbare aflevering: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`;
-    } else {
-      meta.description = `Geen beschikbare (al uitgezonden) afleveringen gevonden.`;
-    }
-
-    return meta;
-  });
+  return meta;
+});
 
   const catalog = { metas };
   catalogCache = catalog;
@@ -425,4 +435,5 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
