@@ -264,14 +264,14 @@ async function buildCatalog() {
 function getShowPoster(images) {
   if (!images) return null;
 
-  // Trakt kan objecten of arrays teruggeven
-  const posterObj = images.poster || images.thumb || images.fanart || null;
+  // Helper om de eerste URL te pakken
+  const pickUrl = obj => {
+    if (!obj) return null;
+    if (Array.isArray(obj)) return obj[0]?.full || obj[0]?.medium || null;
+    return obj.full || obj.medium || null;
+  };
 
-  if (!posterObj) return null;
-  if (Array.isArray(posterObj)) {
-    return posterObj[0]?.full || posterObj[0]?.medium || null;
-  }
-  return posterObj.full || posterObj.medium || null;
+  return pickUrl(images.poster) || pickUrl(images.thumb) || pickUrl(images.fanart) || null;
 }
   
 const metas = withDates.map(s => {
@@ -284,7 +284,7 @@ const metas = withDates.map(s => {
     ids: { tmdb: s.tmdbId },
     overview: s.overview || undefined,
     trakt: { id: s.traktId },
-    poster, // Stremio gebruikt dit
+    poster,
     extra: {}
   };
 
@@ -435,5 +435,6 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
