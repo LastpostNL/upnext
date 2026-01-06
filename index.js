@@ -52,6 +52,11 @@ async function refreshAccessToken() {
     grant_type: 'refresh_token'
   };
   try {
+        console.log('Attempting refresh token...');
+    console.log('Using refresh token:', TRAKT_REFRESH_TOKEN);
+    console.log('Client ID:', TRAKT_CLIENT_ID);
+    console.log('Redirect URI:', redirectUriForRefresh);
+    
     console.log('Refreshing token with redirect_uri:', redirectUriForRefresh);
     const res = await fetch(url, {
       method: 'POST',
@@ -409,4 +414,5 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
