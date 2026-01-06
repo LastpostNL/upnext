@@ -6,7 +6,7 @@ const cors = require('cors');
 
 const app = express();
 app.use(express.json());
-app.use(cors()); // <-- CORS toegevoegd
+app.use(cors()); // CORS toegevoegd
 
 app.set('trust proxy', true);
 
@@ -227,7 +227,6 @@ async function mapWithConcurrencyLimit(items, limit, fn) {
 
 // Build catalog
 async function buildCatalog() {
-  const now = Math.floor(Date.now() / 1000);
   if (catalogCache && (Date.now() - catalogCacheTs) / 1000 < CACHE_TTL_SECONDS) return catalogCache;
 
   const shows = await fetchUserShows();
@@ -239,20 +238,21 @@ async function buildCatalog() {
     return { show: job.show, latest };
   });
 
-const withDates = resolved.map(r => {
-  const show = r.show;
-  const latest = r.latest;
-  return {
-    show,
-    traktId: show.ids.trakt,
-    tmdbId: show.ids && show.ids.tmdb ? show.ids.tmdb : null,
-    name: show.title || show.name || '',
-    year: show.year || null,
-    overview: show.overview || '',
-    latestEpisode: latest ? { ...latest, ts: latest.ts || Date.parse(latest.first_aired) } : null
-  };
-});
+  const withDates = resolved.map(r => {
+    const show = r.show;
+    const latest = r.latest;
+    return {
+      show,
+      traktId: show.ids.trakt,
+      tmdbId: show.ids && show.ids.tmdb ? show.ids.tmdb : null,
+      name: show.title || show.name || '',
+      year: show.year || null,
+      overview: show.overview || '',
+      latestEpisode: latest ? { ...latest, ts: latest.ts || Date.parse(latest.first_aired) } : null
+    };
+  });
 
+  // Sorteer op nieuwste episode
   withDates.sort((a, b) => {
     if (a.latestEpisode && b.latestEpisode) return b.latestEpisode.ts - a.latestEpisode.ts;
     if (a.latestEpisode && !b.latestEpisode) return -1;
@@ -261,34 +261,37 @@ const withDates = resolved.map(r => {
   });
 
   const metas = withDates.map(s => {
-  const showImages = s.show.images || {}; // s.show is het originele show-object van Trakt
-const poster = s.show.images.poster?.full || s.show.images.thumb?.full || s.show.images.fanart?.full || null;
+    const showImages = s.show.images || {};
+    let poster = null;
+    if (showImages.poster?.full) poster = showImages.poster.full;
+    else if (showImages.thumb?.full) poster = showImages.thumb.full;
+    else if (showImages.fanart?.full) poster = showImages.fanart.full;
 
-  const meta = {
-    id: `tmdb:${s.tmdbId}`,
-    type: 'series',
-    name: s.name,
-    ids: { tmdb: s.tmdbId },
-    overview: s.overview || undefined,
-    trakt: { id: s.traktId },
-    poster, // Stremio zal deze als cover gebruiken
-    extra: {}
-  };
-
-  if (s.latestEpisode) {
-    meta.extra.latestEpisode = {
-      season: s.latestEpisode.season,
-      number: s.latestEpisode.number,
-      title: s.latestEpisode.title,
-      first_aired: s.latestEpisode.first_aired
+    const meta = {
+      id: `tmdb:${s.tmdbId}`,
+      type: 'series',
+      name: s.name,
+      ids: { tmdb: s.tmdbId },
+      overview: s.overview || undefined,
+      trakt: { id: s.traktId },
+      poster,
+      extra: {}
     };
-    meta.description = `Laatst beschikbare afbeelding: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`;
-  } else {
-    meta.description = `Geen beschikbare (al uitgezonden) afleveringen gevonden.`;
-  }
 
-  return meta;
-});
+    if (s.latestEpisode) {
+      meta.extra.latestEpisode = {
+        season: s.latestEpisode.season,
+        number: s.latestEpisode.number,
+        title: s.latestEpisode.title,
+        first_aired: s.latestEpisode.first_aired
+      };
+      meta.description = `Laatst beschikbare aflevering: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`;
+    } else {
+      meta.description = `Geen beschikbare (al uitgezonden) afleveringen gevonden.`;
+    }
+
+    return meta;
+  });
 
   const catalog = { metas };
   catalogCache = catalog;
@@ -320,13 +323,11 @@ app.get('/manifest.json', (req, res) => {
   res.json(manifest);
 });
 
-// Catalog endpoint (Stremio-formaat)
+// Catalog endpoint
 app.get(['/catalog/:id', '/catalog/:type/:id.json'], async (req, res) => {
   try {
     const id = req.params.id;
-    if (id !== 'trakt-latest') {
-      return res.status(404).json({ metas: [] });
-    }
+    if (id !== 'trakt-latest') return res.status(404).json({ metas: [] });
     const cat = await buildCatalog();
     res.json(cat);
   } catch (err) {
@@ -424,8 +425,3 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
-
-
-
-
-
