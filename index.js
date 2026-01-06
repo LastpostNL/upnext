@@ -262,7 +262,7 @@ const withDates = resolved.map(r => {
 
   const metas = withDates.map(s => {
   const showImages = s.show.images || {}; // s.show is het originele show-object van Trakt
-  const poster = showImages.poster || showImages.thumb || showImages.fanart || null;
+const poster = s.show.images.poster?.full || s.show.images.thumb?.full || s.show.images.fanart?.full || null;
 
   const meta = {
     id: `tmdb:${s.tmdbId}`,
@@ -424,6 +424,7 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
 
