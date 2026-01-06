@@ -148,16 +148,17 @@ async function fetchUserShows() {
   const watched   = await traktGet('/sync/watched/shows?extended=full,images');
 
   const map = new Map();
+  
   for (const it of collected || []) {
     const show = it.show || it;
-    if (!show || !show.ids) continue;
+if (!show || !show.ids || show.hidden) continue; 
     const id = show.ids.trakt || show.ids.slug || show.ids.tvdb || show.ids.tmdb;
     if (!id) continue;
     map.set(String(show.ids.trakt || id), show);
   }
   for (const it of watched || []) {
     const show = it.show || it;
-    if (!show || !show.ids) continue;
+  if (!show || !show.ids || show.hidden) continue;
     const id = show.ids.trakt || show.ids.slug || show.ids.tvdb || show.ids.tmdb;
     if (!id) continue;
     map.set(String(show.ids.trakt || id), show);
@@ -363,7 +364,7 @@ app.get('/manifest.json', (req, res) => {
       {
         type: 'series',
         id: 'trakt-latest',
-        name: 'Trakt: latest available episode (collected/watched)'
+        name: 'Nieuwe afleveringen binnen je series'
       }
     ],
     idPrefixes: ['trakt:'],
@@ -476,3 +477,4 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
