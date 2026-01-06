@@ -305,10 +305,13 @@ app.get('/manifest.json', (req, res) => {
   res.json(manifest);
 });
 
-// --- Catalog endpoint ---
-app.get('/catalog/:id', async (req, res) => {
+// Catalog endpoint
+app.get(['/catalog/:type/:id.json', '/catalog/:id'], async (req, res) => {
   try {
-    if (req.params.id !== 'trakt-latest') return res.status(404).json({ metas: [] });
+    const id = req.params.id;
+    if (id !== 'trakt-latest') {
+      return res.status(404).json({ metas: [] });
+    }
     const cat = await buildCatalog();
     res.json(cat);
   } catch (err) {
@@ -317,13 +320,13 @@ app.get('/catalog/:id', async (req, res) => {
   }
 });
 
-// --- Meta endpoint ---
-app.get('/meta/:type/:id', async (req, res) => {
+// Meta endpoint
+app.get(['/meta/:type/:id.json', '/meta/:type/:id'], async (req, res) => {
   const { type, id } = req.params;
   try {
     if (type !== 'series') return res.status(404).send('Not found');
-    const cat = await buildCatalog();
-    const meta = (cat.metas || []).find(m => m.id === id);
+    const catalog = await buildCatalog();
+    const meta = (catalog.metas || []).find(m => m.id === id);
     if (!meta) return res.status(404).send('Not found');
     res.json(meta);
   } catch (err) {
@@ -397,3 +400,4 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
