@@ -1,8 +1,20 @@
+Copilot said: Thanks — the problem is your app
+Thanks — the problem is your app is still building the redirect URI dynamically from the request (and it doesn't trust the Render proxy), plus the token refresh / exchange sometimes needs to use the exact redirect URI you registered. Update index.js so it:
+
+trusts the proxy (so req.protocol becomes "https" on Render)
+prefers the TRAKT_REDIRECT_URI env var if present (so the app always uses exactly the same redirect URI you registered in Trakt)
+uses that redirect URI consistently for /auth, /auth/callback and token refresh
+Apply this updated file, redeploy/restart on Render, then run a fresh authorization (don't reuse an old code).
+
+name=index.js
 const express = require('express');
 const fetch = require('node-fetch');
 
 const app = express();
 app.use(express.json());
+
+// IMPORTANT: trust proxy so req.protocol reflects the external scheme (https) on Render
+app.set('trust proxy', true);
 
 const PORT = process.env.PORT || 3000;
 
@@ -10,6 +22,9 @@ const TRAKT_CLIENT_ID = process.env.TRAKT_CLIENT_ID;
 const TRAKT_CLIENT_SECRET = process.env.TRAKT_CLIENT_SECRET;
 let TRAKT_REFRESH_TOKEN = process.env.TRAKT_REFRESH_TOKEN || null;
 let TRAKT_ACCESS_TOKEN = process.env.TRAKT_ACCESS_TOKEN || null;
+
+// Optional env override for redirect URI (set this to the exact URI registered in Trakt)
+const TRAKT_REDIRECT_URI_ENV = process.env.TRAKT_REDIRECT_URI || null;
 
 // Cache
 let catalogCache = null;
@@ -22,6 +37,13 @@ const MAX_CONCURRENT_SEASON_REQUESTS = 5;
 // Utility: sleep
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
+// Helper to get the redirect URI to use (prefer env override)
+function getRedirectUri(req) {
+  if (TRAKT_REDIRECT_URI_ENV) return TRAKT_REDIRECT_URI_ENV;
+  // Build from request (req.protocol will be 'https' when trust proxy is true on Render)
+  return `${req.protocol}://${req.get('host')}/auth/callback`;
+}
+
 // Helper: refresh access token using refresh token (Trakt)
 async function refreshAccessToken() {
   if (!TRAKT_CLIENT_ID || !TRAKT_CLIENT_SECRET || !TRAKT_REFRESH_TOKEN) {
@@ -29,14 +51,17 @@ async function refreshAccessToken() {
     return null;
   }
   const url = 'https://api.trakt.tv/oauth/token';
+  // Use configured redirect URI if present, otherwise use the urn OOB fallback
+  const redirectUriForRefresh = TRAKT_REDIRECT_URI_ENV || 'urn:ietf:wg:oauth:2.0:oob';
   const body = {
     refresh_token: TRAKT_REFRESH_TOKEN,
     client_id: TRAKT_CLIENT_ID,
     client_secret: TRAKT_CLIENT_SECRET,
-    redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
+    redirect_uri: redirectUriForRefresh,
     grant_type: 'refresh_token'
   };
   try {
+    console.log('Refreshing token with redirect_uri:', redirectUriForRefresh);
     const res = await fetch(url, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -319,8 +344,9 @@ app.get('/auth', (req, res) => {
   if (!TRAKT_CLIENT_ID) {
     return res.send('Set TRAKT_CLIENT_ID and TRAKT_CLIENT_SECRET in env to use OAuth flow.');
   }
-  // Redirect user to Trakt authorize page
-  const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
+  // Build redirect URI (and log it for debugging)
+  const redirectUri = getRedirectUri(req);
+  console.log('/auth redirect_uri used:', redirectUri);
   const url = `https://trakt.tv/oauth/authorize?response_type=code&client_id=${TRAKT_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}`;
   res.redirect(url);
 });
@@ -335,11 +361,13 @@ app.get('/auth/callback', async (req, res) => {
   }
   const tokenUrl = 'https://api.trakt.tv/oauth/token';
   try {
+    const redirectUri = getRedirectUri(req);
+    console.log('/auth/callback redirect_uri used:', redirectUri);
     const body = {
       code,
       client_id: TRAKT_CLIENT_ID,
       client_secret: TRAKT_CLIENT_SECRET,
-      redirect_uri: `${req.protocol}://${req.get('host')}/auth/callback`,
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code'
     };
     const r = await fetch(tokenUrl, {
@@ -371,7 +399,7 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-// Health
+// Health (simple)
 app.get('/', (req, res) => {
   res.send('Trakt Latest Addon is running. Manifest at /manifest.json');
 });
