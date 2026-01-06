@@ -1,0 +1,17 @@
+{
+  "name": "stremio-trakt-latest-addon",
+  "version": "1.0.0",
+  "description": "Stremio addon: shows your Trakt collected/watched shows ordered by latest available episode",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.6.7"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT"
+}
