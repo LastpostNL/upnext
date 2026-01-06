@@ -144,8 +144,8 @@ async function traktGet(path) {
 
 // Fetch user's collected and watched shows
 async function fetchUserShows() {
-  const collected = await traktGet('/sync/collection/shows?extended=full');
-  const watched = await traktGet('/sync/watched/shows?extended=full');
+const collected = await traktGet('/sync/collection/shows?extended=full,images');
+const watched   = await traktGet('/sync/watched/shows?extended=full,images');
 
   const map = new Map();
   for (const it of collected || []) {
@@ -264,20 +264,23 @@ async function buildCatalog() {
 function getShowPoster(images) {
   if (!images) return null;
 
-  // Helper om de eerste URL te pakken
-  const pickUrl = obj => {
-    if (!obj) return null;
-    if (Array.isArray(obj)) return obj[0]?.full || obj[0]?.medium || null;
-    return obj.full || obj.medium || null;
-  };
+  const pick = arr =>
+    Array.isArray(arr) && arr.length
+      ? `https://${arr[0]}`
+      : null;
 
-  return pickUrl(images.poster) || pickUrl(images.thumb) || pickUrl(images.fanart) || null;
+  return (
+    pick(images.poster) ||
+    pick(images.thumb) ||
+    pick(images.fanart) ||
+    null
+  );
 }
   
 const metas = withDates.map(s => {
   const poster = getShowPoster(s.show.images);
 
-  const meta = {
+  return {
     id: `tmdb:${s.tmdbId}`,
     type: 'series',
     name: s.name,
@@ -285,22 +288,20 @@ const metas = withDates.map(s => {
     overview: s.overview || undefined,
     trakt: { id: s.traktId },
     poster,
-    extra: {}
+    extra: s.latestEpisode
+      ? {
+          latestEpisode: {
+            season: s.latestEpisode.season,
+            number: s.latestEpisode.number,
+            title: s.latestEpisode.title,
+            first_aired: s.latestEpisode.first_aired
+          }
+        }
+      : {},
+    description: s.latestEpisode
+      ? `Laatst beschikbare aflevering: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`
+      : 'Geen beschikbare (al uitgezonden) afleveringen gevonden.'
   };
-
-  if (s.latestEpisode) {
-    meta.extra.latestEpisode = {
-      season: s.latestEpisode.season,
-      number: s.latestEpisode.number,
-      title: s.latestEpisode.title,
-      first_aired: s.latestEpisode.first_aired
-    };
-    meta.description = `Laatst beschikbare aflevering: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`;
-  } else {
-    meta.description = `Geen beschikbare (al uitgezonden) afleveringen gevonden.`;
-  }
-
-  return meta;
 });
 
   const catalog = { metas };
@@ -435,6 +436,7 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
 
