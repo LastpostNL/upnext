@@ -1,3 +1,5 @@
+const cors = require('cors');
+app.use(cors()); 
 const express = require('express');
 const fetch = require('node-fetch');
 const fs = require('fs');
@@ -425,3 +427,4 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
