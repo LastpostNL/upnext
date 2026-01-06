@@ -6,14 +6,7 @@ const path = require('path');
 const app = express();
 app.use(express.json());
 
-// --- CORS headers (essentieel voor Stremio installatie) ---
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-  next();
-});
-
-// IMPORTANT: trust proxy so req.protocol reflects the external scheme (https) on Render
+// trust proxy so req.protocol reflects external https
 app.set('trust proxy', true);
 
 const PORT = process.env.PORT || 3000;
@@ -23,11 +16,9 @@ const TRAKT_CLIENT_SECRET = process.env.TRAKT_CLIENT_SECRET;
 let TRAKT_REFRESH_TOKEN = process.env.TRAKT_REFRESH_TOKEN || null;
 let TRAKT_ACCESS_TOKEN = process.env.TRAKT_ACCESS_TOKEN || null;
 
-// Refresh token opslagbestand
-const REFRESH_TOKEN_FILE = path.join(__dirname, 'trakt_refresh_token.txt');
-
-// Optional env override for redirect URI
 const TRAKT_REDIRECT_URI_ENV = process.env.TRAKT_REDIRECT_URI || null;
+
+const REFRESH_TOKEN_FILE = path.join(__dirname, 'trakt_refresh_token.txt');
 
 // Cache
 let catalogCache = null;
@@ -37,14 +28,8 @@ const CACHE_TTL_SECONDS = parseInt(process.env.CACHE_TTL_SECONDS || '300', 10);
 // concurrency limit for season requests
 const MAX_CONCURRENT_SEASON_REQUESTS = 5;
 
-// Utility: sleep
+// sleep utility
 const wait = ms => new Promise(r => setTimeout(r, ms));
-
-// --- Init refresh token: env heeft prioriteit, anders file ---
-if (!TRAKT_REFRESH_TOKEN && fs.existsSync(REFRESH_TOKEN_FILE)) {
-  TRAKT_REFRESH_TOKEN = fs.readFileSync(REFRESH_TOKEN_FILE, 'utf8').trim();
-  console.log('Loaded refresh token from file.');
-}
 
 // Helper to get redirect URI
 function getRedirectUri(req) {
@@ -52,7 +37,17 @@ function getRedirectUri(req) {
   return `${req.protocol}://${req.get('host')}/auth/callback`;
 }
 
-// Helper: refresh access token using refresh token
+// -----------------
+// Refresh token handling
+// -----------------
+
+// Load token from file if env empty
+if (!TRAKT_REFRESH_TOKEN && fs.existsSync(REFRESH_TOKEN_FILE)) {
+  TRAKT_REFRESH_TOKEN = fs.readFileSync(REFRESH_TOKEN_FILE, 'utf8').trim();
+  console.log('Loaded REFRESH_TOKEN from file for automatic use.');
+}
+
+// Refresh access token
 async function refreshAccessToken() {
   if (!TRAKT_CLIENT_ID || !TRAKT_CLIENT_SECRET || !TRAKT_REFRESH_TOKEN) {
     console.log('Missing Trakt client id/secret or refresh token for token refresh.');
@@ -81,12 +76,10 @@ async function refreshAccessToken() {
       headers: { 'Content-Type': 'application/json' }
     });
 
-    console.log('Trakt refresh response status:', res.status);
     const text = await res.text();
-    console.log('Trakt refresh response body:', text);
-
     if (!res.ok) {
-      console.error('Failed refresh token', res.status, text);
+      console.error('Trakt refresh response status:', res.status);
+      console.error('Trakt refresh response body:', text);
       return null;
     }
 
@@ -94,9 +87,9 @@ async function refreshAccessToken() {
     TRAKT_ACCESS_TOKEN = data.access_token;
     TRAKT_REFRESH_TOKEN = data.refresh_token;
 
-    // Opslaan in bestand voor persistente gebruik bij restarts
+    // Save to file for persistent use
     fs.writeFileSync(REFRESH_TOKEN_FILE, TRAKT_REFRESH_TOKEN, 'utf8');
-    console.log('Refreshed Trakt token successfully. Saved new refresh_token to file.');
+    console.log('Refreshed Trakt token. Saved REFRESH_TOKEN to file for automatic use.');
 
     return TRAKT_ACCESS_TOKEN;
   } catch (err) {
@@ -105,14 +98,16 @@ async function refreshAccessToken() {
   }
 }
 
-// Helper: ensure we have a valid access token
+// Ensure access token
 async function ensureAccessToken() {
   if (TRAKT_ACCESS_TOKEN) return TRAKT_ACCESS_TOKEN;
   if (TRAKT_REFRESH_TOKEN) return await refreshAccessToken();
   return null;
 }
 
-// Low-level Trakt GET helper
+// -----------------
+// Trakt API helpers
+// -----------------
 async function traktGet(path) {
   const token = await ensureAccessToken();
   const headers = {
@@ -120,6 +115,7 @@ async function traktGet(path) {
     'trakt-api-key': TRAKT_CLIENT_ID
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
+
   const url = `https://api.trakt.tv${path}`;
   const res = await fetch(url, { headers });
   if (res.status === 401) {
@@ -143,12 +139,10 @@ async function traktGet(path) {
   return res.json();
 }
 
-// Fetch user's collected shows and watched shows
+// Fetch user shows (collected + watched)
 async function fetchUserShows() {
   const collected = await traktGet('/sync/collection/shows?extended=full');
   const watched = await traktGet('/sync/watched/shows?extended=full');
-
-  console.log('Collected shows:', collected.length, 'Watched shows:', watched.length);
 
   const map = new Map();
   for (const it of collected || []) {
@@ -200,7 +194,7 @@ async function fetchLatestAvailableEpisodeForShow(traktId) {
   }
 }
 
-// Helper: run promises with concurrency limit
+// Concurrency limiter
 async function mapWithConcurrencyLimit(items, limit, fn) {
   const results = [];
   let i = 0;
@@ -224,6 +218,7 @@ async function mapWithConcurrencyLimit(items, limit, fn) {
 
 // Build catalog
 async function buildCatalog() {
+  const now = Math.floor(Date.now() / 1000);
   if (catalogCache && (Date.now() - catalogCacheTs) / 1000 < CACHE_TTL_SECONDS) return catalogCache;
 
   const shows = await fetchUserShows();
@@ -241,6 +236,7 @@ async function buildCatalog() {
     return {
       traktId: show.ids.trakt,
       tmdbId: show.ids && show.ids.tmdb ? show.ids.tmdb : null,
+      imdbId: show.ids && show.ids.imdb ? show.ids.imdb : null,
       name: show.title || show.name || '',
       year: show.year || null,
       overview: show.overview || '',
@@ -256,15 +252,19 @@ async function buildCatalog() {
   });
 
   const metas = withDates.map(s => {
+    const metaId = s.tmdbId ? `tmdb:${s.tmdbId}` : `trakt:${s.traktId}`;
+    const ids = s.tmdbId ? { tmdb: s.tmdbId } : undefined;
+
     const meta = {
-      id: `trakt:${s.traktId}`,
+      id: metaId,
       type: 'series',
       name: s.name,
-      ids: (s.tmdbId ? { tmdb: s.tmdbId } : undefined),
+      ids,
       overview: s.overview || undefined,
       trakt: { id: s.traktId },
       extra: {}
     };
+
     if (s.latestEpisode) {
       meta.extra.latestEpisode = {
         season: s.latestEpisode.season,
@@ -276,6 +276,7 @@ async function buildCatalog() {
     } else {
       meta.description = `No available (already aired) episodes found for this show yet.`;
     }
+
     return meta;
   });
 
@@ -285,7 +286,9 @@ async function buildCatalog() {
   return catalog;
 }
 
-// --- Stremio manifest endpoint ---
+// -----------------
+// Stremio manifest
+// -----------------
 app.get('/manifest.json', (req, res) => {
   const manifest = {
     id: 'org.lastpostnl.trakt-latest-addon',
@@ -295,9 +298,13 @@ app.get('/manifest.json', (req, res) => {
     resources: ['catalog', 'meta'],
     types: ['series'],
     catalogs: [
-      { type: 'series', id: 'trakt-latest', name: 'Trakt: latest available episode (collected/watched)' }
+      {
+        type: 'series',
+        id: 'trakt-latest',
+        name: 'Trakt: latest available episode (collected/watched)'
+      }
     ],
-    idPrefixes: ['trakt:'],
+    idPrefixes: ['trakt:', 'tmdb:'],
     extra: {
       longDescription: 'Shows your Trakt collected/watched shows ordered by the most recent episode that has already aired. Returns TMDB ids for metadata provider usage.'
     }
@@ -305,13 +312,13 @@ app.get('/manifest.json', (req, res) => {
   res.json(manifest);
 });
 
-// Catalog endpoint (Stremio-formaat)
+// -----------------
+// Catalog endpoint (supports Stremio format)
+// -----------------
 app.get(['/catalog/:id', '/catalog/:type/:id.json'], async (req, res) => {
   try {
     const id = req.params.id;
-    if (id !== 'trakt-latest') {
-      return res.status(404).json({ metas: [] });
-    }
+    if (id !== 'trakt-latest') return res.status(404).json({ metas: [] });
     const cat = await buildCatalog();
     res.json(cat);
   } catch (err) {
@@ -320,7 +327,9 @@ app.get(['/catalog/:id', '/catalog/:type/:id.json'], async (req, res) => {
   }
 });
 
+// -----------------
 // Meta endpoint
+// -----------------
 app.get(['/meta/:type/:id', '/meta/:type/:id.json'], async (req, res) => {
   const { type, id } = req.params;
   try {
@@ -335,7 +344,9 @@ app.get(['/meta/:type/:id', '/meta/:type/:id.json'], async (req, res) => {
   }
 });
 
-// --- OAuth helpers ---
+// -----------------
+// OAuth helpers
+// -----------------
 app.get('/auth', (req, res) => {
   if (!TRAKT_CLIENT_ID) return res.send('Set TRAKT_CLIENT_ID and TRAKT_CLIENT_SECRET in env to use OAuth flow.');
   const redirectUri = getRedirectUri(req);
@@ -348,10 +359,12 @@ app.get('/auth/callback', async (req, res) => {
   const code = req.query.code;
   if (!code) return res.status(400).send('Missing code query param.');
   if (!TRAKT_CLIENT_ID || !TRAKT_CLIENT_SECRET) return res.status(500).send('TRAKT_CLIENT_ID or TRAKT_CLIENT_SECRET not configured.');
+
   const tokenUrl = 'https://api.trakt.tv/oauth/token';
   try {
     const redirectUri = getRedirectUri(req);
     console.log('/auth/callback redirect_uri used:', redirectUri);
+
     const body = {
       code,
       client_id: TRAKT_CLIENT_ID,
@@ -359,40 +372,52 @@ app.get('/auth/callback', async (req, res) => {
       redirect_uri: redirectUri,
       grant_type: 'authorization_code'
     };
-    const r = await fetch(tokenUrl, { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
+
+    const r = await fetch(tokenUrl, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' }
+    });
+
     const data = await r.json();
     if (!r.ok) return res.status(500).send(`Token exchange failed: ${JSON.stringify(data)}`);
+
     TRAKT_ACCESS_TOKEN = data.access_token;
     TRAKT_REFRESH_TOKEN = data.refresh_token;
 
-    // Opslaan in bestand
     fs.writeFileSync(REFRESH_TOKEN_FILE, TRAKT_REFRESH_TOKEN, 'utf8');
+    console.log('Saved REFRESH_TOKEN to file for automatic use.');
 
-    res.send(`
+    const html = `
       <h2>Trakt tokens received</h2>
       <p><strong>ACCESS_TOKEN</strong>: <code>${data.access_token}</code></p>
       <p><strong>REFRESH_TOKEN</strong>: <code>${data.refresh_token}</code></p>
-      <p>Saved REFRESH_TOKEN to file for automatic use.</p>
+      <p>The server now stores the refresh token automatically in a file for future use.</p>
       <p><a href="/manifest.json">Back to manifest</a></p>
-    `);
+    `;
+    res.send(html);
   } catch (err) {
     console.error('OAuth callback error', err);
     res.status(500).send('OAuth token exchange failed.');
   }
 });
 
-// --- Health endpoint ---
+// -----------------
+// Health check
+// -----------------
 app.get('/', (req, res) => {
   res.send('Trakt Latest Addon is running. Manifest at /manifest.json');
 });
 
-// --- Start server ---
+// -----------------
+// Startup
+// -----------------
 (async () => {
   if (TRAKT_REFRESH_TOKEN && TRAKT_CLIENT_ID && TRAKT_CLIENT_SECRET) {
     console.log('Refreshing access token at startup...');
     await refreshAccessToken();
   } else {
-    if (!TRAKT_REFRESH_TOKEN) console.log('No TRAKT_REFRESH_TOKEN provided. You can use /auth to obtain tokens.');
+    if (!TRAKT_REFRESH_TOKEN) console.log('No TRAKT_REFRESH_TOKEN available. Use /auth to obtain tokens.');
   }
 
   app.listen(PORT, () => {
@@ -400,5 +425,3 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
-
-
