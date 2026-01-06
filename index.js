@@ -305,8 +305,8 @@ app.get('/manifest.json', (req, res) => {
   res.json(manifest);
 });
 
-// Catalog endpoint
-app.get(['/catalog/:type/:id.json', '/catalog/:id'], async (req, res) => {
+// Catalog endpoint (Stremio-formaat)
+app.get(['/catalog/:id', '/catalog/:type/:id.json'], async (req, res) => {
   try {
     const id = req.params.id;
     if (id !== 'trakt-latest') {
@@ -321,7 +321,7 @@ app.get(['/catalog/:type/:id.json', '/catalog/:id'], async (req, res) => {
 });
 
 // Meta endpoint
-app.get(['/meta/:type/:id.json', '/meta/:type/:id'], async (req, res) => {
+app.get(['/meta/:type/:id', '/meta/:type/:id.json'], async (req, res) => {
   const { type, id } = req.params;
   try {
     if (type !== 'series') return res.status(404).send('Not found');
@@ -400,4 +400,5 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
