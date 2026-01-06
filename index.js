@@ -247,7 +247,7 @@ async function buildCatalog() {
   const metas = withDates.map(s => {
     const meta = {
       id: `trakt:${s.traktId}`,
-      type: 'tv',
+      type: 'series',
       name: s.name,
       // Provide TMDB id so AIOMetadata (set to TMDB) can fetch localized metadata/posters.
       ids: (s.tmdbId ? { tmdb: s.tmdbId } : undefined),
@@ -284,10 +284,10 @@ app.get('/manifest.json', (req, res) => {
     name: 'Trakt Latest Available Episode (TMDB-friendly)',
     description: 'Shows your Trakt collected/watched shows ordered by latest episode already available (not future). Exposes TMDB ids so a TMDB metadata provider can fetch localized metadata.',
     resources: ['catalog', 'meta'],
-    types: ['tv'],
+    types: ['series'],
     catalogs: [
       {
-        type: 'tv',
+        type: 'series',
         id: 'trakt-latest',
         name: 'Trakt: latest available episode (collected/watched)'
       }
@@ -318,7 +318,7 @@ app.get('/catalog/:id', async (req, res) => {
 app.get('/meta/:type/:id', async (req, res) => {
   const { type, id } = req.params;
   try {
-    if (type !== 'tv') return res.status(404).send('Not found');
+    if (type !== 'series') return res.status(404).send('Not found');
     // id is like trakt:12345
     const catalog = await buildCatalog();
     const meta = (catalog.metas || []).find(m => m.id === id);
@@ -409,3 +409,4 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
