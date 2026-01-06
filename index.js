@@ -31,7 +31,7 @@ let catalogCacheTs = 0;
 const CACHE_TTL_SECONDS = parseInt(process.env.CACHE_TTL_SECONDS || '300', 10);
 
 // concurrency limit for season requests
-const MAX_CONCURRENT_SEASON_REQUESTS = 5;
+const MAX_CONCURRENT_SEASON_REQUESTS = 2;
 
 // Utility: sleep
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -425,3 +425,4 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
