@@ -151,14 +151,14 @@ async function fetchUserShows() {
   
   for (const it of collected || []) {
     const show = it.show || it;
-if (!show || !show.ids || show.hidden) continue; 
+  if (!show || !show.ids) continue;
     const id = show.ids.trakt || show.ids.slug || show.ids.tvdb || show.ids.tmdb;
     if (!id) continue;
     map.set(String(show.ids.trakt || id), show);
   }
   for (const it of watched || []) {
     const show = it.show || it;
-  if (!show || !show.ids || show.hidden) continue;
+  if (!show || !show.ids) continue;
     const id = show.ids.trakt || show.ids.slug || show.ids.tvdb || show.ids.tmdb;
     if (!id) continue;
     map.set(String(show.ids.trakt || id), show);
@@ -477,4 +477,5 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
