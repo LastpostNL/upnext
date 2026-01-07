@@ -258,39 +258,47 @@ async function buildCatalog() {
   const jobs = shows.map(s => ({ show: s, traktId: s.ids && s.ids.trakt ? s.ids.trakt : null }));
 
   const resolved = await mapWithConcurrencyLimit(
-  jobs,
-  MAX_CONCURRENT_SEASON_REQUESTS,
-  async (job) => {
-    if (!job.traktId) return null;
+    jobs,
+    MAX_CONCURRENT_SEASON_REQUESTS,
+    async (job) => {
+      if (!job.traktId) return null;
 
-    const progress = await fetchShowProgress(job.traktId);
+      const [latestEpisode, progress] = await Promise.all([
+        fetchLatestAvailableEpisodeForShow(job.traktId),
+        fetchShowProgress(job.traktId)
+      ]);
 
-    // Geen progress → skip
-    if (!progress || !progress.next_episode) return null;
-
-    // Nog niet uitgezonden → skip
-    const nextTs = Date.parse(progress.next_episode.first_aired);
-    if (isNaN(nextTs) || nextTs > Date.now()) return null;
-
-    return {
-      show: job.show,
-      latest: {
-        season: progress.next_episode.season,
-        number: progress.next_episode.number,
-        title: progress.next_episode.title || '',
-        first_aired: progress.next_episode.first_aired,
-        ts: nextTs
+      // Geen progress → skip voor “wat te kijken”
+      let nextEpisodeToWatch = null;
+      if (progress && progress.next_episode) {
+        const nextTs = Date.parse(progress.next_episode.first_aired);
+        if (!isNaN(nextTs) && nextTs <= Date.now()) {
+          nextEpisodeToWatch = {
+            season: progress.next_episode.season,
+            number: progress.next_episode.number,
+            title: progress.next_episode.title || '',
+            first_aired: progress.next_episode.first_aired,
+            ts: nextTs
+          };
+        }
       }
-    };
-  }
-);
 
+      return {
+        show: job.show,
+        latest: latestEpisode,            // laatste daadwerkelijk uitgezonden aflevering
+        next: nextEpisodeToWatch          // wat te kijken (indien beschikbaar)
+      };
+    }
+  );
 
   const withDates = resolved
     .filter(Boolean)
     .map(r => {
       const show = r.show;
-      const latest = r.latest;
+
+      // Kies wat we als “laatste episode” tonen in catalog
+      const latest = r.next || r.latest; // eerst next_episode, fallback naar latest aired
+
       return {
         show,
         traktId: show.ids.trakt,
@@ -298,7 +306,9 @@ async function buildCatalog() {
         name: show.title || show.name || '',
         year: show.year || null,
         overview: show.overview || '',
-        latestEpisode: latest ? { ...latest, ts: latest.ts || Date.parse(latest.first_aired) } : null
+        latestEpisode: latest
+          ? { ...latest, ts: latest.ts || Date.parse(latest.first_aired) }
+          : null
       };
     });
 
@@ -312,23 +322,12 @@ async function buildCatalog() {
 
   function getShowPoster(images) {
     if (!images) return null;
-
-    const pick = arr =>
-      Array.isArray(arr) && arr.length
-        ? `https://${arr[0]}`
-        : null;
-
-    return (
-      pick(images.poster) ||
-      pick(images.thumb) ||
-      pick(images.fanart) ||
-      null
-    );
+    const pick = arr => Array.isArray(arr) && arr.length ? `https://${arr[0]}` : null;
+    return pick(images.poster) || pick(images.thumb) || pick(images.fanart) || null;
   }
 
   const metas = withDates.map(s => {
     const poster = getShowPoster(s.show.images);
-
     return {
       id: `tmdb:${s.tmdbId}`,
       type: 'series',
@@ -485,6 +484,7 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
 
