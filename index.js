@@ -268,8 +268,12 @@ async function buildCatalog() {
         fetchShowProgress(job.traktId)
       ]);
 
-      // filter completed shows
-      if (isShowCompleted(progress)) return null;
+      // Geen nieuwe aflevering om te kijken → skip
+if (!progress || !progress.next_episode) return null;
+
+// Aflevering bestaat, maar is nog niet uitgezonden → skip
+const nextTs = Date.parse(progress.next_episode.first_aired);
+if (isNaN(nextTs) || nextTs > Date.now()) return null;
 
       return {
         show: job.show,
@@ -477,5 +481,6 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
