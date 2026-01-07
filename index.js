@@ -263,24 +263,25 @@ async function buildCatalog() {
     async (job) => {
       if (!job.traktId) return null;
 
-      const [latest, progress] = await Promise.all([
-        fetchLatestAvailableEpisodeForShow(job.traktId),
-        fetchShowProgress(job.traktId)
-      ]);
+const progress = await fetchShowProgress(job.traktId);
 
-      // Geen nieuwe aflevering om te kijken → skip
+// Geen progress → skip
 if (!progress || !progress.next_episode) return null;
 
-// Aflevering bestaat, maar is nog niet uitgezonden → skip
+// Nog niet uitgezonden → skip
 const nextTs = Date.parse(progress.next_episode.first_aired);
 if (isNaN(nextTs) || nextTs > Date.now()) return null;
 
-      return {
-        show: job.show,
-        latest
-      };
-    }
-  );
+return {
+  show: job.show,
+  latest: {
+    season: progress.next_episode.season,
+    number: progress.next_episode.number,
+    title: progress.next_episode.title || '',
+    first_aired: progress.next_episode.first_aired,
+    ts: nextTs
+  }
+};
 
   const withDates = resolved
     .filter(Boolean)
@@ -481,6 +482,7 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
 
