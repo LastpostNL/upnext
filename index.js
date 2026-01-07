@@ -175,25 +175,23 @@ async function fetchLatestAvailableEpisodeForShow(traktId) {
     const now = Date.now();
     let best = null;
 
-    for (const season of seasons || []) {
-      if (!season.episodes) continue;
-      for (const ep of season.episodes) {
-        if (!ep || !ep.first_aired) continue;
-        const ts = Date.parse(ep.first_aired);
-        if (isNaN(ts)) continue;
-        if (ts <= now) {
-          if (!best || ts > best.ts) {
-            best = {
-              ts,
-              season: ep.season,
-              number: ep.number,
-              title: ep.title || '',
-              first_aired: ep.first_aired
-            };
-          }
-        }
-      }
+for (const season of seasons || []) {
+  if (!season.episodes || season.number === 0) continue; // specials overslaan
+  for (const ep of season.episodes) {
+    if (!ep || !ep.first_aired) continue;
+    const ts = Date.parse(ep.first_aired);
+    if (isNaN(ts) || ts > now) continue;
+    if (!best || ts > best.ts) {
+      best = {
+        ts,
+        season: ep.season,
+        number: ep.number,
+        title: ep.title || '',
+        first_aired: ep.first_aired
+      };
     }
+  }
+}
 
     return best;
   } catch (err) {
@@ -466,3 +464,4 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
