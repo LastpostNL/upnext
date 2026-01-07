@@ -202,12 +202,14 @@ async function fetchLatestAvailableEpisodeForShow(traktId) {
 
 // Build catalog: Recently Aired, sorted by latest episode
 async function buildCatalog() {
-  // Check cache
   if (catalogCache && (Date.now() - catalogCacheTs) / 1000 < CACHE_TTL_SECONDS) return catalogCache;
 
   const shows = await fetchUserShows();
+  if (!shows || !shows.length) {
+    console.warn('No shows fetched from Trakt.');
+    return { metas: [] };
+  }
 
-  // Voor elke show de laatste reeds uitgezonden aflevering ophalen
   const jobs = shows.map(s => ({ show: s, traktId: s.ids?.trakt || null }));
 
   const resolved = await mapWithConcurrencyLimit(
@@ -217,9 +219,8 @@ async function buildCatalog() {
       if (!job.traktId) return null;
 
       const latest = await fetchLatestAvailableEpisodeForShow(job.traktId);
-      if (!latest) return null; // geen uitgezonden afleveringen
+      if (!latest) return null;
 
-      // Voortgang ophalen (optioneel)
       let watched = false;
       try {
         const progress = await fetchShowProgress(job.traktId);
@@ -245,6 +246,11 @@ async function buildCatalog() {
       const latest = r.latest;
       const poster = s.images?.poster?.[0] ? `https://${s.images.poster[0]}` : null;
 
+      // Beschrijving aanpassen: “Nieuw!” als niet bekeken
+      const desc = r.watched
+        ? `Laatst uitgezonden aflevering: S${latest.season}E${latest.number} — ${latest.title} (al bekeken)`
+        : `Laatst uitgezonden aflevering: S${latest.season}E${latest.number} — ${latest.title} (Nieuw!)`;
+
       return {
         id: `tmdb:${s.ids?.tmdb || s.ids?.trakt}`,
         type: 'series',
@@ -261,7 +267,7 @@ async function buildCatalog() {
             watched: r.watched
           }
         },
-        description: `Laatst uitgezonden aflevering: S${latest.season}E${latest.number} — ${latest.title}${r.watched ? ' (al bekeken)' : ''}`
+        description: desc
       };
     });
 
