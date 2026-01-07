@@ -168,7 +168,7 @@ async function fetchUserShows() {
   return Array.from(map.values());
 }
 
-// Fetch latest available episode for a Trakt show
+// Fetch latest available episode for a Trakt show, ignoring specials (season 0)
 async function fetchLatestAvailableEpisodeForShow(traktId) {
   try {
     const seasons = await traktGet(`/shows/${traktId}/seasons?extended=episodes`);
@@ -177,6 +177,7 @@ async function fetchLatestAvailableEpisodeForShow(traktId) {
 
     for (const season of seasons || []) {
       if (!season.episodes) continue;
+      if (season.number === 0) continue; // specials overslaan
       for (const ep of season.episodes) {
         if (!ep || !ep.first_aired) continue;
         const ts = Date.parse(ep.first_aired);
@@ -257,8 +258,8 @@ async function buildCatalog() {
 
   const shows = await fetchUserShows();
 
-  // Voor elke show de laatste reeds uitgezonden aflevering ophalen
-  const jobs = shows.map(s => ({ show: s, traktId: s.ids && s.ids.trakt ? s.ids.trakt : null }));
+  // Voor elke show de laatste reeds uitgezonden aflevering ophalen en voortgang checken
+  const jobs = shows.map(s => ({ show: s, traktId: s.ids?.trakt || null }));
 
   const resolved = await mapWithConcurrencyLimit(
     jobs,
@@ -269,6 +270,10 @@ async function buildCatalog() {
       // Laatste reeds uitgezonden aflevering ophalen
       const latest = await fetchLatestAvailableEpisodeForShow(job.traktId);
       if (!latest) return null; // geen uitgezonden afleveringen
+
+      // Voortgang ophalen en volledig bekeken checken
+      const progress = await fetchShowProgress(job.traktId);
+      if (isShowCompleted(progress)) return null; // volledig bekeken, overslaan
 
       return {
         show: job.show,
@@ -285,7 +290,7 @@ async function buildCatalog() {
       return {
         show,
         traktId: show.ids.trakt,
-        tmdbId: show.ids && show.ids.tmdb ? show.ids.tmdb : null,
+        tmdbId: show.ids?.tmdb || null,
         name: show.title || show.name || '',
         year: show.year || null,
         overview: show.overview || '',
@@ -466,3 +471,4 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
