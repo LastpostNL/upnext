@@ -250,11 +250,14 @@ async function mapWithConcurrencyLimit(items, limit, fn) {
   return Promise.all(results);
 }
 
-// Build catalog
+// Build catalog: Recently Aired, Unwatched/Airdate-based
 async function buildCatalog() {
+  // Check cache
   if (catalogCache && (Date.now() - catalogCacheTs) / 1000 < CACHE_TTL_SECONDS) return catalogCache;
 
   const shows = await fetchUserShows();
+
+  // Voor elke show de laatste reeds uitgezonden aflevering ophalen
   const jobs = shows.map(s => ({ show: s, traktId: s.ids && s.ids.trakt ? s.ids.trakt : null }));
 
   const resolved = await mapWithConcurrencyLimit(
@@ -263,30 +266,13 @@ async function buildCatalog() {
     async (job) => {
       if (!job.traktId) return null;
 
-      const [latestEpisode, progress] = await Promise.all([
-        fetchLatestAvailableEpisodeForShow(job.traktId),
-        fetchShowProgress(job.traktId)
-      ]);
-
-      // Geen progress → skip voor “wat te kijken”
-      let nextEpisodeToWatch = null;
-      if (progress && progress.next_episode) {
-        const nextTs = Date.parse(progress.next_episode.first_aired);
-        if (!isNaN(nextTs) && nextTs <= Date.now()) {
-          nextEpisodeToWatch = {
-            season: progress.next_episode.season,
-            number: progress.next_episode.number,
-            title: progress.next_episode.title || '',
-            first_aired: progress.next_episode.first_aired,
-            ts: nextTs
-          };
-        }
-      }
+      // Laatste reeds uitgezonden aflevering ophalen
+      const latest = await fetchLatestAvailableEpisodeForShow(job.traktId);
+      if (!latest) return null; // geen uitgezonden afleveringen
 
       return {
         show: job.show,
-        latest: latestEpisode,            // laatste daadwerkelijk uitgezonden aflevering
-        next: nextEpisodeToWatch          // wat te kijken (indien beschikbaar)
+        latest
       };
     }
   );
@@ -295,10 +281,7 @@ async function buildCatalog() {
     .filter(Boolean)
     .map(r => {
       const show = r.show;
-
-      // Kies wat we als “laatste episode” tonen in catalog
-      const latest = r.next || r.latest; // eerst next_episode, fallback naar latest aired
-
+      const latest = r.latest;
       return {
         show,
         traktId: show.ids.trakt,
@@ -306,13 +289,11 @@ async function buildCatalog() {
         name: show.title || show.name || '',
         year: show.year || null,
         overview: show.overview || '',
-        latestEpisode: latest
-          ? { ...latest, ts: latest.ts || Date.parse(latest.first_aired) }
-          : null
+        latestEpisode: latest ? { ...latest, ts: latest.ts || Date.parse(latest.first_aired) } : null
       };
     });
 
-  // Sorteer op nieuwste episode
+  // Sorteer op laatst uitgezonden aflevering
   withDates.sort((a, b) => {
     if (a.latestEpisode && b.latestEpisode) return b.latestEpisode.ts - a.latestEpisode.ts;
     if (a.latestEpisode && !b.latestEpisode) return -1;
@@ -328,6 +309,7 @@ async function buildCatalog() {
 
   const metas = withDates.map(s => {
     const poster = getShowPoster(s.show.images);
+
     return {
       id: `tmdb:${s.tmdbId}`,
       type: 'series',
@@ -347,8 +329,8 @@ async function buildCatalog() {
           }
         : {},
       description: s.latestEpisode
-        ? `Laatst beschikbare aflevering: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`
-        : 'Geen beschikbare (al uitgezonden) afleveringen gevonden.'
+        ? `Laatst uitgezonden aflevering: S${s.latestEpisode.season}E${s.latestEpisode.number} — ${s.latestEpisode.title}`
+        : 'Geen uitgezonden afleveringen gevonden.'
     };
   });
 
@@ -484,6 +466,7 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
 
