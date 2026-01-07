@@ -173,27 +173,32 @@ async function fetchLatestAvailableEpisodeForShow(traktId) {
   try {
     const seasons = await traktGet(`/shows/${traktId}/seasons?extended=episodes`);
     const now = Date.now();
-    let best = null;
+    const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+    const cutoff = now - ONE_YEAR_MS;
 
-for (const season of seasons || []) {
-  if (!season.episodes || season.number === 0) continue; // specials overslaan
-  for (const ep of season.episodes) {
-    if (!ep || !ep.first_aired) continue;
-    const ts = Date.parse(ep.first_aired);
-    if (isNaN(ts) || ts > now) continue;
-    if (!best || ts > best.ts) {
-      best = {
-        ts,
-        season: ep.season,
-        number: ep.number,
-        title: ep.title || '',
-        first_aired: ep.first_aired
-      };
+    let last = null;
+
+    for (const season of seasons || []) {
+      if (!season.episodes || season.number === 0) continue; // specials overslaan
+
+      for (const ep of season.episodes) {
+        if (!ep || !ep.first_aired) continue;
+        const ts = Date.parse(ep.first_aired);
+        if (isNaN(ts) || ts > now || ts < cutoff) continue; // negeer te oude of toekomstige afleveringen
+
+        if (!last || ts > last.ts) {
+          last = {
+            season: ep.season,
+            number: ep.number,
+            title: ep.title || '',
+            first_aired: ep.first_aired,
+            ts
+          };
+        }
+      }
     }
-  }
-}
 
-    return best;
+    return last;
   } catch (err) {
     console.warn(`Failed to fetch seasons for show ${traktId}:`, err.message);
     return null;
@@ -464,4 +469,5 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
