@@ -42,6 +42,16 @@ function getRedirectUri(req) {
   return `${req.protocol}://${req.get('host')}/auth/callback`;
 }
 
+function isLatestEpisodeWatched(progress, latestEpisode) {
+  if (!progress || !progress.seasons || !latestEpisode) return false;
+
+  const seasonProgress = progress.seasons.find(s => s.number === latestEpisode.season);
+  if (!seasonProgress) return false;
+
+  // Kijk of de laatste aflevering (number) al bekeken is
+  return seasonProgress.episodes?.some(ep => ep.number === latestEpisode.number && ep.completed) || false;
+}
+
 // Refresh access token using Trakt refresh token
 async function refreshAccessToken() {
   if (!TRAKT_CLIENT_ID || !TRAKT_CLIENT_SECRET || !TRAKT_REFRESH_TOKEN) {
@@ -261,26 +271,28 @@ async function buildCatalog() {
   // Voor elke show de laatste reeds uitgezonden aflevering ophalen en voortgang checken
   const jobs = shows.map(s => ({ show: s, traktId: s.ids?.trakt || null }));
 
-  const resolved = await mapWithConcurrencyLimit(
-    jobs,
-    MAX_CONCURRENT_SEASON_REQUESTS,
-    async (job) => {
-      if (!job.traktId) return null;
+ const resolved = await mapWithConcurrencyLimit(
+  jobs,
+  MAX_CONCURRENT_SEASON_REQUESTS,
+  async (job) => {
+    if (!job.traktId) return null;
 
-      // Laatste reeds uitgezonden aflevering ophalen
-      const latest = await fetchLatestAvailableEpisodeForShow(job.traktId);
-      if (!latest) return null; // geen uitgezonden afleveringen
+    // Laatste reeds uitgezonden aflevering ophalen
+    const latest = await fetchLatestAvailableEpisodeForShow(job.traktId);
+    if (!latest) return null; // geen uitgezonden afleveringen
 
-      // Voortgang ophalen en volledig bekeken checken
-      const progress = await fetchShowProgress(job.traktId);
-      if (isShowCompleted(progress)) return null; // volledig bekeken, overslaan
+    // Voortgang ophalen
+    const progress = await fetchShowProgress(job.traktId);
 
-      return {
-        show: job.show,
-        latest
-      };
-    }
-  );
+    // Filter: als de laatste aflevering al bekeken is, overslaan
+    if (isLatestEpisodeWatched(progress, latest)) return null;
+
+    return {
+      show: job.show,
+      latest
+    };
+  }
+);
 
   const withDates = resolved
     .filter(Boolean)
@@ -471,4 +483,5 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
