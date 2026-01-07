@@ -258,30 +258,33 @@ async function buildCatalog() {
   const jobs = shows.map(s => ({ show: s, traktId: s.ids && s.ids.trakt ? s.ids.trakt : null }));
 
   const resolved = await mapWithConcurrencyLimit(
-    jobs,
-    MAX_CONCURRENT_SEASON_REQUESTS,
-    async (job) => {
-      if (!job.traktId) return null;
+  jobs,
+  MAX_CONCURRENT_SEASON_REQUESTS,
+  async (job) => {
+    if (!job.traktId) return null;
 
-const progress = await fetchShowProgress(job.traktId);
+    const progress = await fetchShowProgress(job.traktId);
 
-// Geen progress → skip
-if (!progress || !progress.next_episode) return null;
+    // Geen progress → skip
+    if (!progress || !progress.next_episode) return null;
 
-// Nog niet uitgezonden → skip
-const nextTs = Date.parse(progress.next_episode.first_aired);
-if (isNaN(nextTs) || nextTs > Date.now()) return null;
+    // Nog niet uitgezonden → skip
+    const nextTs = Date.parse(progress.next_episode.first_aired);
+    if (isNaN(nextTs) || nextTs > Date.now()) return null;
 
-return {
-  show: job.show,
-  latest: {
-    season: progress.next_episode.season,
-    number: progress.next_episode.number,
-    title: progress.next_episode.title || '',
-    first_aired: progress.next_episode.first_aired,
-    ts: nextTs
+    return {
+      show: job.show,
+      latest: {
+        season: progress.next_episode.season,
+        number: progress.next_episode.number,
+        title: progress.next_episode.title || '',
+        first_aired: progress.next_episode.first_aired,
+        ts: nextTs
+      }
+    };
   }
-};
+);
+
 
   const withDates = resolved
     .filter(Boolean)
@@ -482,6 +485,7 @@ app.get('/', (req, res) => {
     console.log(`Manifest available at /manifest.json`);
   });
 })();
+
 
 
 
