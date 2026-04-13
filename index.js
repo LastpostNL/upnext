@@ -413,18 +413,25 @@ app.get('/auth/callback', async (req, res) => {
   try {
     const redirectUri = getRedirectUri(req);
     console.log('/auth/callback redirect_uri used:', redirectUri);
-    const body = {
-      code,
-      client_id: TRAKT_CLIENT_ID,
-      client_secret: TRAKT_CLIENT_SECRET,
-      redirect_uri: redirectUri,
-      grant_type: 'authorization_code'
-    };
-    const r = await fetch(tokenUrl, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers: { 'Content-Type': 'application/json' }
-    });
+   const params = new URLSearchParams({
+  code,
+  client_id: TRAKT_CLIENT_ID,
+  client_secret: TRAKT_CLIENT_SECRET,
+  redirect_uri: redirectUri,
+  grant_type: 'authorization_code'
+});
+
+const r = await fetch(tokenUrl, {
+  method: 'POST',
+  body: params.toString(),
+  headers: {
+    'Content-Type': 'application/x-www-form-urlencoded'
+  }
+});
+    const data = await r.json();
+console.log('TOKEN STATUS:', r.status);
+console.log('TOKEN RESPONSE:', data);
+    
     const data = await r.json();
     if (!r.ok) return res.status(500).send(`Token exchange failed: ${JSON.stringify(data)}`);
 
