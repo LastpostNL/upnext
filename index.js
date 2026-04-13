@@ -7,17 +7,15 @@ const cors = require('cors');
 const app = express();
 app.use(express.json());
 app.use(cors());
-
 app.set('trust proxy', true);
 
 const PORT = process.env.PORT || 3000;
 
 const TRAKT_CLIENT_ID = process.env.TRAKT_CLIENT_ID;
 const TRAKT_CLIENT_SECRET = process.env.TRAKT_CLIENT_SECRET;
-const TRAKT_REDIRECT_URI_ENV = process.env.TRAKT_REDIRECT_URI || null;
 
 let TRAKT_REFRESH_TOKEN = process.env.TRAKT_REFRESH_TOKEN || null;
-let TRAKT_ACCESS_TOKEN = process.env.TRAKT_ACCESS_TOKEN || null;
+let TRAKT_ACCESS_TOKEN = null;
 
 const REFRESH_TOKEN_FILE = path.join(__dirname, 'trakt_refresh_token.txt');
 
@@ -25,41 +23,47 @@ if (!TRAKT_REFRESH_TOKEN && fs.existsSync(REFRESH_TOKEN_FILE)) {
   TRAKT_REFRESH_TOKEN = fs.readFileSync(REFRESH_TOKEN_FILE, 'utf-8').trim();
 }
 
+/**
+ * -----------------------------
+ * CACHE LAYERS (IMPORTANT)
+ * -----------------------------
+ */
+
+// full catalog cache
 let catalogCache = null;
 let catalogCacheTs = 0;
-const CACHE_TTL_SECONDS = parseInt(process.env.CACHE_TTL_SECONDS || '300', 10);
+const CATALOG_TTL = 5 * 60 * 1000; // 5 min
 
-const MAX_CONCURRENT_SEASON_REQUESTS = 2;
+// per-show cache (VERY IMPORTANT OPTIMIZATION)
+const showCache = new Map();
+const showCacheTTL = 30 * 60 * 1000; // 30 min
 
-const wait = ms => new Promise(r => setTimeout(r, ms));
+// concurrency limit
+const MAX_CONCURRENCY = 3;
 
-function getRedirectUri(req) {
-  if (TRAKT_REDIRECT_URI_ENV) return TRAKT_REDIRECT_URI_ENV;
-  return `${req.protocol}://${req.get('host')}/auth/callback`;
-}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// -------------------- TOKEN REFRESH --------------------
+/**
+ * -----------------------------
+ * AUTH (REFRESH ONLY)
+ * -----------------------------
+ */
 
 async function refreshAccessToken() {
   if (!TRAKT_CLIENT_ID || !TRAKT_CLIENT_SECRET || !TRAKT_REFRESH_TOKEN) {
-    console.log('Missing Trakt credentials for refresh');
+    console.log('Missing Trakt credentials');
     return null;
   }
 
-  const url = 'https://api.trakt.tv/oauth/token';
-
-  const params = new URLSearchParams({
-    refresh_token: TRAKT_REFRESH_TOKEN,
-    client_id: TRAKT_CLIENT_ID,
-    client_secret: TRAKT_CLIENT_SECRET,
-    redirect_uri: TRAKT_REDIRECT_URI_ENV || 'urn:ietf:wg:oauth:2.0:oob',
-    grant_type: 'refresh_token'
-  });
-
-  const res = await fetch(url, {
+  const res = await fetch('https://api.trakt.tv/oauth/token', {
     method: 'POST',
-    body: params.toString(),
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      refresh_token: TRAKT_REFRESH_TOKEN,
+      client_id: TRAKT_CLIENT_ID,
+      client_secret: TRAKT_CLIENT_SECRET,
+      grant_type: 'refresh_token'
+    }).toString()
   });
 
   const text = await res.text();
@@ -68,7 +72,8 @@ async function refreshAccessToken() {
   try {
     data = JSON.parse(text);
   } catch {
-    data = { raw: text };
+    console.log('Trakt refresh raw:', text);
+    return null;
   }
 
   if (!res.ok) {
@@ -80,45 +85,38 @@ async function refreshAccessToken() {
   TRAKT_REFRESH_TOKEN = data.refresh_token;
 
   if (!process.env.TRAKT_REFRESH_TOKEN) {
-    fs.writeFileSync(REFRESH_TOKEN_FILE, TRAKT_REFRESH_TOKEN, 'utf-8');
+    fs.writeFileSync(REFRESH_TOKEN_FILE, TRAKT_REFRESH_TOKEN);
   }
 
+  console.log('Token refreshed');
   return TRAKT_ACCESS_TOKEN;
 }
 
-async function ensureAccessToken() {
+async function ensureToken() {
   if (TRAKT_ACCESS_TOKEN) return TRAKT_ACCESS_TOKEN;
-  if (TRAKT_REFRESH_TOKEN) return await refreshAccessToken();
-  return null;
+  return await refreshAccessToken();
 }
 
-// -------------------- TRAKT GET --------------------
+/**
+ * -----------------------------
+ * TRAKT API WRAPPER
+ * -----------------------------
+ */
 
-async function traktGet(path) {
-  const token = await ensureAccessToken();
+async function traktGet(url) {
+  const token = await ensureToken();
 
-  const headers = {
-    'trakt-api-version': '2',
-    'trakt-api-key': TRAKT_CLIENT_ID
-  };
+  const res = await fetch(`https://api.trakt.tv${url}`, {
+    headers: {
+      'trakt-api-version': '2',
+      'trakt-api-key': TRAKT_CLIENT_ID,
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    }
+  });
 
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const url = `https://api.trakt.tv${path}`;
-  const res = await fetch(url, { headers });
-
-  if (res.status === 401 && TRAKT_REFRESH_TOKEN) {
+  if (res.status === 401) {
     await refreshAccessToken();
-
-    const retry = await fetch(url, {
-      headers: {
-        ...headers,
-        Authorization: `Bearer ${TRAKT_ACCESS_TOKEN}`
-      }
-    });
-
-    if (!retry.ok) throw new Error(await retry.text());
-    return retry.json();
+    return traktGet(url);
   }
 
   if (!res.ok) {
@@ -128,236 +126,201 @@ async function traktGet(path) {
   return res.json();
 }
 
-// -------------------- USER SHOWS --------------------
+/**
+ * -----------------------------
+ * USER SHOWS
+ * -----------------------------
+ */
 
 async function fetchUserShows() {
-  const collected = await traktGet('/sync/collection/shows?extended=full,images');
-  const watched = await traktGet('/sync/watched/shows?extended=full,images');
+  const [collected, watched] = await Promise.all([
+    traktGet('/sync/collection/shows?extended=full,images'),
+    traktGet('/sync/watched/shows?extended=full,images')
+  ]);
 
   const map = new Map();
 
-  for (const it of collected || []) {
-    const show = it.show;
-    if (show?.ids?.trakt) map.set(show.ids.trakt, show);
+  for (const item of [...(collected || []), ...(watched || [])]) {
+    const show = item.show;
+    if (!show?.ids?.trakt) continue;
+    map.set(show.ids.trakt, show);
   }
 
-  for (const it of watched || []) {
-    const show = it.show;
-    if (show?.ids?.trakt) map.set(show.ids.trakt, show);
-  }
-
-  return Array.from(map.values());
+  return [...map.values()];
 }
 
-// -------------------- LATEST EPISODE --------------------
+/**
+ * -----------------------------
+ * EPISODE CACHE PER SHOW
+ * -----------------------------
+ */
 
-async function fetchLatestAvailableEpisodeForShow(traktId) {
-  try {
-    const seasons = await traktGet(`/shows/${traktId}/seasons?extended=episodes`);
+async function getLatestEpisode(traktId) {
+  const cached = showCache.get(traktId);
+  if (cached && Date.now() - cached.ts < showCacheTTL) {
+    return cached.data;
+  }
 
-    const now = Date.now();
-    const cutoff = now - 365 * 24 * 60 * 60 * 1000;
+  const seasons = await traktGet(`/shows/${traktId}/seasons?extended=episodes`);
 
-    let last = null;
+  const now = Date.now();
+  const cutoff = now - 365 * 24 * 60 * 60 * 1000;
 
-    for (const season of seasons || []) {
-      if (!season.episodes || season.number === 0) continue;
+  let last = null;
 
-      for (const ep of season.episodes) {
-        if (!ep?.first_aired) continue;
+  for (const season of seasons || []) {
+    if (!season.episodes || season.number === 0) continue;
 
-        const ts = Date.parse(ep.first_aired);
-        if (isNaN(ts) || ts > now || ts < cutoff) continue;
+    for (const ep of season.episodes) {
+      if (!ep?.first_aired) continue;
 
-        if (!last || ts > last.ts) {
-          last = {
-            season: ep.season,
-            number: ep.number,
-            title: ep.title,
-            first_aired: ep.first_aired,
-            ts
-          };
-        }
+      const ts = Date.parse(ep.first_aired);
+      if (isNaN(ts) || ts > now || ts < cutoff) continue;
+
+      if (!last || ts > last.ts) {
+        last = {
+          season: ep.season,
+          number: ep.number,
+          title: ep.title,
+          first_aired: ep.first_aired,
+          ts
+        };
       }
     }
-
-    return last;
-  } catch (e) {
-    return null;
   }
+
+  showCache.set(traktId, { ts: Date.now(), data: last });
+
+  return last;
 }
 
-// -------------------- CONCURRENCY --------------------
+/**
+ * -----------------------------
+ * CONCURRENCY
+ * -----------------------------
+ */
 
-async function mapWithConcurrencyLimit(items, limit, fn) {
-  const results = [];
+async function mapLimit(arr, limit, fn) {
+  const res = [];
   let i = 0;
-  const executing = new Set();
 
-  async function enqueue() {
-    if (i >= items.length) return;
-
-    const idx = i++;
-    const p = Promise.resolve().then(() => fn(items[idx], idx));
-
-    results[idx] = p;
-    executing.add(p);
-
-    p.finally(() => executing.delete(p));
-
-    if (executing.size >= limit) {
-      await Promise.race(executing);
+  const workers = new Array(limit).fill(null).map(async () => {
+    while (i < arr.length) {
+      const idx = i++;
+      res[idx] = await fn(arr[idx], idx);
     }
+  });
 
-    return enqueue();
-  }
-
-  await enqueue();
-  return Promise.all(results);
+  await Promise.all(workers);
+  return res;
 }
 
-// -------------------- CATALOG --------------------
+/**
+ * -----------------------------
+ * CATALOG BUILDER
+ * -----------------------------
+ */
 
 async function buildCatalog() {
-  if (catalogCache && (Date.now() - catalogCacheTs) / 1000 < CACHE_TTL_SECONDS) {
+  if (catalogCache && Date.now() - catalogCacheTs < CATALOG_TTL) {
     return catalogCache;
   }
 
   const shows = await fetchUserShows();
 
-  const jobs = shows.map(show => ({
-    show,
-    traktId: show.ids?.trakt
-  }));
-
-  const resolved = await mapWithConcurrencyLimit(
-    jobs,
-    MAX_CONCURRENT_SEASON_REQUESTS,
-    async job => {
-      if (!job.traktId) return null;
-
-      const latest = await fetchLatestAvailableEpisodeForShow(job.traktId);
+  const enriched = await mapLimit(
+    shows,
+    MAX_CONCURRENCY,
+    async show => {
+      const latest = await getLatestEpisode(show.ids.trakt);
       if (!latest) return null;
 
-      return { show: job.show, latest };
+      return {
+        show,
+        latest
+      };
     }
   );
 
-  const metas = resolved
+  const metas = enriched
     .filter(Boolean)
     .map(({ show, latest }) => ({
       id: `tmdb:${show.ids.tmdb}`,
       type: 'series',
       name: show.title || show.name,
-      ids: { tmdb: show.ids.tmdb },
       overview: show.overview,
       poster: show?.images?.poster?.[0]
         ? `https://${show.images.poster[0]}`
         : null,
-      extra: {
-        latestEpisode: latest
-      },
-      description: `Laatst: S${latest.season}E${latest.number} - ${latest.title}`
-    }));
+      ids: { tmdb: show.ids.tmdb },
+      extra: { latestEpisode: latest },
+      description: `S${latest.season}E${latest.number} - ${latest.title}`
+    }))
+    .sort((a, b) => {
+      const aT = a.extra.latestEpisode.ts;
+      const bT = b.extra.latestEpisode.ts;
+      return bT - aT;
+    });
 
-  const catalog = { metas };
-
-  catalogCache = catalog;
+  catalogCache = { metas };
   catalogCacheTs = Date.now();
 
-  return catalog;
+  return catalogCache;
 }
 
-// -------------------- ROUTES --------------------
+/**
+ * -----------------------------
+ * ROUTES
+ * -----------------------------
+ */
 
 app.get('/manifest.json', (req, res) => {
   res.json({
-    id: 'org.lastpostnl.trakt-latest-addon',
-    version: '1.0.0',
-    name: 'Trakt Latest Episode',
+    id: 'org.trakt.pro.latest',
+    version: '2.0.0',
+    name: 'Trakt Latest PRO',
     resources: ['catalog', 'meta'],
     types: ['series'],
     catalogs: [
       {
         id: 'trakt-latest',
         type: 'series',
-        name: 'Trakt Latest'
+        name: 'Latest Episodes (PRO)'
       }
     ]
   });
 });
 
-app.get(['/catalog/:id'], async (req, res) => {
-  if (req.params.id !== 'trakt-latest') return res.json({ metas: [] });
+app.get('/catalog/:id', async (req, res) => {
+  if (req.params.id !== 'trakt-latest') {
+    return res.json({ metas: [] });
+  }
 
-  const cat = await buildCatalog();
-  res.json(cat);
-});
-
-app.get('/auth', (req, res) => {
-  const redirectUri = getRedirectUri(req);
-
-  const url =
-    `https://trakt.tv/oauth/authorize?response_type=code` +
-    `&client_id=${TRAKT_CLIENT_ID}` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}`;
-
-  res.redirect(url);
-});
-
-// -------------------- FIXED CALLBACK --------------------
-
-app.get('/auth/callback', async (req, res) => {
-  const code = req.query.code;
-  const redirectUri = getRedirectUri(req);
-
-  const params = new URLSearchParams({
-    code,
-    client_id: TRAKT_CLIENT_ID,
-    client_secret: TRAKT_CLIENT_SECRET,
-    redirect_uri: redirectUri,
-    grant_type: 'authorization_code'
-  });
-
-  const r = await fetch('https://api.trakt.tv/oauth/token', {
-    method: 'POST',
-    body: params.toString(),
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded'
-    }
-  });
-
-  const text = await r.text();
-
-  let data;
   try {
-    data = JSON.parse(text);
-  } catch {
-    data = { raw: text };
+    const cat = await buildCatalog();
+    res.json(cat);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ metas: [] });
   }
-
-  console.log('TOKEN STATUS:', r.status);
-  console.log('TOKEN RESPONSE:', data);
-
-  if (!r.ok) {
-    return res.status(500).send(`Token exchange failed: ${text}`);
-  }
-
-  TRAKT_ACCESS_TOKEN = data.access_token;
-  TRAKT_REFRESH_TOKEN = data.refresh_token;
-
-  res.send(`
-    <h2>Success</h2>
-    <p>Tokens ontvangen</p>
-  `);
 });
 
 app.get('/', (req, res) => {
-  res.send('Addon running');
+  res.send('Trakt PRO addon running');
 });
 
-// -------------------- START --------------------
+/**
+ * -----------------------------
+ * STARTUP
+ * -----------------------------
+ */
 
-app.listen(PORT, () => {
-  console.log('Server running on', PORT);
-});
+(async () => {
+  if (TRAKT_REFRESH_TOKEN) {
+    await refreshAccessToken();
+  }
+
+  app.listen(PORT, () => {
+    console.log(`Running on ${PORT}`);
+  });
+})();
